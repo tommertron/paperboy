@@ -1,0 +1,9 @@
+services:
+  paperboy:
+    image: ghcr.io/tommertron/paperboy:latest
+    # build: .                # or build it yourself from this folder
+    network_mode: host        # lets it find your reader on the home network
+    user: "1000:1000"         # your user id (run `id -u`), so you can read data/config.json
+    volumes:
+      - ./data:/data          # config.json lives here
+    restart: unless-stopped

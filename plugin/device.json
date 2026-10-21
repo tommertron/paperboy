@@ -1,0 +1,59 @@
+{
+  "title": "Paperboy",
+  "description": "Your read-later list, delivered",
+  "config": {
+    "file": "/.crosspoint/plugin-data/paperboy/config.json"
+  },
+  "browse": {
+    "format": "json",
+    "url": "{cfg.server}/list/instapaper?page={page}&limit={limit}",
+    "lists_url": "{cfg.server}/lists?token={cfg.token}",
+    "headers": {
+      "Authorization": "Bearer {cfg.token}"
+    },
+    "items": "items",
+    "fields": {
+      "title": "title",
+      "author": "subtitle",
+      "id": "id",
+      "description": "description"
+    },
+    "page_size": 8
+  },
+  "download": {
+    "url": "{cfg.server}/epub/{id}",
+    "headers": {
+      "Authorization": "Bearer {cfg.token}"
+    },
+    "bundle": {
+      "base": "base",
+      "files": "files",
+      "subdir": "Paperboy"
+    }
+  },
+  "events": {
+    "reader.exit": {
+      "connect": true,
+      "request": {
+        "method": "POST",
+        "url": "{cfg.server}/progress",
+        "headers": {
+          "Authorization": "Bearer {cfg.token}",
+          "Content-Type": "application/json"
+        },
+        "body": "{\"id\":\"{meta.paperboy_id}\",\"legacy_id\":\"{meta.instapaper_id}\",\"percent\":\"{event.percent}\",\"event_id\":\"{event.id}\"}"
+      }
+    },
+    "sleep.enter": {
+      "request": {
+        "method": "POST",
+        "url": "{cfg.server}/progress",
+        "headers": {
+          "Authorization": "Bearer {cfg.token}",
+          "Content-Type": "application/json"
+        },
+        "body": "{\"id\":\"{meta.paperboy_id}\",\"legacy_id\":\"{meta.instapaper_id}\",\"percent\":\"{event.percent}\",\"event_id\":\"{event.id}\"}"
+      }
+    }
+  }
+}

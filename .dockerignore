@@ -1,0 +1,6 @@
+data/
+dist/
+_src/
+.git/
+tests/
+plugin/

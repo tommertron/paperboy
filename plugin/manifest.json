@@ -1,0 +1,14 @@
+{
+  "name": "paperboy",
+  "title": "Paperboy",
+  "mount": "settings",
+  "description": "Your Instapaper and Feedbin reading list on the reader: browse, download, Sync all, and auto-archive when you finish. Needs a Paperboy server.",
+  "author": "Tom Robertson",
+  "version": "1.0.0",
+  "files": [
+    "manifest.json",
+    "device.json",
+    "plugin.js",
+    "README.md"
+  ]
+}

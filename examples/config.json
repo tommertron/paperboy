@@ -1,0 +1,14 @@
+{
+  "instapaper": {
+    "consumer_key": "from Instapaper's API key email",
+    "consumer_secret": "from Instapaper's API key email",
+    "username": "you@example.com",
+    "password": "your Instapaper password"
+  },
+  "feedbin": {
+    "email": "you@example.com",
+    "password": "your Feedbin password"
+  },
+  "public_url": "https://your-server.example.com/paperboy",
+  "archive_at": 95
+}
