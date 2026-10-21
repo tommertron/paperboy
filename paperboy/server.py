@@ -7,6 +7,7 @@ so this does the Instapaper/Feedbin side.
   GET  /lists?token=T                the reader's list picker (one entry per source)
   GET  /list/<source>?page=&limit=   a source's articles, paged the way the firmware asks
                                      (limit = page_size + 1); page 1 starts with Sync all
+                                     (only articles not already on the reader)
   GET  /unread, /starred             aliases for /list/instapaper, /list/feedbin
   GET  /f/<token>/<file>             a file by its on-card name (<Name>.epub or
                                      <Name>.epub.meta.json); what bundle downloads fetch
@@ -70,8 +71,12 @@ class Library:
         self.cache_dir = config.data_path("cache")
         os.makedirs(self.cache_dir, exist_ok=True)
         self.finished_path = config.data_path("finished.json")
+        self.on_card_path = config.data_path("on_card.json")
         self._lock = threading.Lock()
         self._lists = {}  # source -> (fetched_at, items)
+        self._card_lock = threading.Lock()
+        self._offered = {}  # first file of a row's bundle -> (files, ids)
+        self._runs = []     # bundle downloads in progress: [files, next index, ids]
 
     # --- lists ---
 
@@ -167,6 +172,59 @@ class Library:
             except Exception as e:
                 log(f"pre-build skipped ({e!r})")
             time.sleep(WARM_EVERY)
+
+    # --- what's on the card ---
+    #
+    # The firmware downloads every file a bundle lists, whatever is already on
+    # the card, so Sync all only lists articles the reader doesn't have yet.
+    # Evidence the reader has one: it finished downloading a bundle that held
+    # it, it reported closing it (/progress), or a home tidy-up saw it there
+    # (that one replaces the set outright, so it also forgets deleted files).
+
+    def on_card(self):
+        try:
+            with open(self.on_card_path) as f:
+                return set(json.load(f))
+        except (OSError, ValueError):
+            return set()
+
+    def mark_on_card(self, ids, replace=False):
+        with self._card_lock:
+            have = self.on_card()
+            new = set(ids) if replace else have | set(ids)
+            if new == have:
+                return
+            tmp = self.on_card_path + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(sorted(new), f)
+            os.replace(tmp, self.on_card_path)
+
+    def offer(self, files, ids):
+        """Remember a row's bundle, so served() can tell when it has all arrived."""
+        with self._card_lock:
+            if len(self._offered) > 2000:
+                self._offered.clear()
+            self._offered[files[0]] = (files, ids)
+
+    def served(self, fname):
+        """Count a bundle file as delivered. The reader keeps a bundle only once
+        every file has arrived (a failure or cancel rolls the whole lot back),
+        so ids count as on the card only when a bundle's last file is served
+        straight after the rest, in order."""
+        with self._card_lock:
+            # A file can carry on one bundle and start another (a cancelled
+            # sync, then tapping the article it would have fetched next), so
+            # follow every bundle it could belong to.
+            runs = [r for r in self._runs if r[0][r[1]] == fname]
+            if fname in self._offered:
+                files, ids = self._offered[fname]
+                runs.append([files, 0, ids])
+            for r in runs:
+                r[1] += 1
+            done = [i for r in runs if r[1] == len(r[0]) for i in r[2]]
+            self._runs = [r for r in runs if r[1] < len(r[0])]
+        if done:
+            self.mark_on_card(done)
 
     # --- finishing ---
 
@@ -329,20 +387,29 @@ class Handler(BaseHTTPRequestHandler):
                           for i in self.lib.items(source)]
             sync_row = None
         else:
-            ready = [i for i in everything if self.lib.cached(i["id"])]
-            n = len(everything)
+            on_card = self.lib.on_card()
+            todo = [i for i in everything if i["id"] not in on_card]
+            ready = [i for i in todo if self.lib.cached(i["id"])]
+            n = len(ready)
+            count = f"{n} new" if len(todo) < len(everything) else f"{n} articles"
+            if n < len(todo):
+                count = f"{n} of {len(todo)} new ready"
             sync_row = {
                 "id": SYNC_ID, "base": base,
-                "title": f"Sync all ({n} articles)" if len(ready) == n
-                         else f"Sync all ({len(ready)} of {n} ready)",
+                "title": f"Sync all ({count})",
                 "subtitle": " + ".join(LIST_TITLES[s] for s in self.lib.sources),
-                "description": "Downloads every article on your reading list into /Paperboy. "
+                "description": "Downloads the articles that aren't on your reader yet into /Paperboy. "
                                "Afterwards, open the Library and use Refresh library.",
-                "files": [f for i in ready for f in files_for(i)],
+                # Sidecar before EPUB, the reverse of a single row's order, so
+                # the first file served tells served() which bundle started.
+                "files": [f for i in ready for f in reversed(files_for(i))],
             } if ready else None
         rows = [dict(i, base=base, files=files_for(i)) for i in everything
                 if self.lib.source_of(i["id"]) == source]
+        for r in rows:
+            self.lib.offer(r["files"], [r["id"]])
         if sync_row:
+            self.lib.offer(sync_row["files"], [i["id"] for i in ready])
             rows.insert(0, sync_row)
         start = (page - 1) * size
         self._send(200, {"total": len(rows), "items": rows[start:start + limit]})
@@ -355,12 +422,14 @@ class Handler(BaseHTTPRequestHandler):
         if not item:
             return self._send(404, {"error": "not on the reading list"})
         if fname.endswith(".meta.json"):
-            return self._send(200, sidecar_bytes(item["id"]))
-        p = self.lib.epub_path(item["id"])
-        if not p:
-            return self._send(404, {"error": "not on the reading list"})
-        with open(p, "rb") as f:
-            self._send(200, f.read(), "application/epub+zip")
+            self._send(200, sidecar_bytes(item["id"]))
+        else:
+            p = self.lib.epub_path(item["id"])
+            if not p:
+                return self._send(404, {"error": "not on the reading list"})
+            with open(p, "rb") as f:
+                self._send(200, f.read(), "application/epub+zip")
+        self.lib.served(fname)
 
     def _epub(self, item_id):
         p = self.lib.epub_path(item_id)
@@ -377,6 +446,7 @@ class Handler(BaseHTTPRequestHandler):
         item_id = next((c for c in candidates if re.fullmatch(r"(?:fb)?\d+", c)), "")
         if not item_id:
             return self._send(200, {"ok": True, "ignored": "not a Paperboy article"})
+        self.lib.mark_on_card([item_id])   # the reader just closed it, so it has it
         try:
             pct = float(str(body.get("percent", "")).strip().rstrip("%"))
         except ValueError:

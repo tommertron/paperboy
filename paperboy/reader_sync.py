@@ -162,7 +162,7 @@ def sync_pass(lib, host, sidecar_bytes, files_for, dry_run=False):
         gone = set(delete)
         for k in [k for k in _sidecar_cache if k[0] in gone]:
             del _sidecar_cache[k]
-    added = []
+    added, added_ids = [], []
     if missing and not exists:
         reader.mkdir("/", FOLDER.strip("/"))
     for i in missing:
@@ -176,6 +176,9 @@ def sync_pass(lib, host, sidecar_bytes, files_for, dry_run=False):
         # (retried next pass), never a sidecar pointing at nothing.
         reader.upload(FOLDER, meta_name, sidecar_bytes(i["id"]), "application/json")
         added.append(i["name"])
+        added_ids.append(i["id"])
+    # Ground truth for what Sync all can skip.
+    lib.mark_on_card((set(have) - set(removed)) | set(added_ids), replace=True)
     return {"deleted": delete, "removed_ids": removed, "added": added}
 
 

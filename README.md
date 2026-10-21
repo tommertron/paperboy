@@ -3,7 +3,7 @@
 Your unread [Instapaper](https://www.instapaper.com) articles and starred [Feedbin](https://feedbin.com) articles on a [CrossPoint](https://crosspointreader.com) e-reader.
 
 - Browse your reading list on the reader and download articles as EPUBs, with title covers and the articles' images.
-- **Sync all** downloads everything in one go.
+- **Sync all** downloads, in one go, every article that isn't on the reader yet.
 - Finish an article and it's archived in Instapaper (or unstarred in Feedbin) the next time the reader is on Wi-Fi.
 - While the reader is in File Transfer mode on your home network, it's tidied to match your list: archived articles removed, new ones added.
 

@@ -9,6 +9,7 @@ import shutil
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -105,6 +106,38 @@ class ServerTest(unittest.TestCase):
         st, b = self.get("/starred")                    # alias, and a duplicate title gets its id
         fb = [r["files"][0] for r in json.loads(b)["items"][1:]]
         self.assertIn("First-Article-fb202.epub", fb)
+
+    def test_sync_all_offers_only_whats_not_on_the_card(self):
+        for i in self.lib.catalog():
+            self.lib.epub_path(i["id"])
+        sync_row = lambda: json.loads(self.get("/list/instapaper?page=1&limit=9")[1])["items"][0]
+
+        def fetch(f):
+            # The server notes a delivery just after sending, so let it finish.
+            st = self.get(f"/f/{TOKEN}/{f}", auth=False)[0]
+            time.sleep(0.05)
+            return st
+
+        row = sync_row()
+        self.assertEqual(row["files"][:2], ["First-Article.epub.meta.json", "First-Article.epub"])
+        for f in row["files"][:3]:                     # cancelled part-way: the reader keeps nothing
+            fetch(f)
+        self.assertEqual(self.lib.on_card(), set())
+        for f in ["Second-Article.epub", "Second-Article.epub.meta.json"]:   # one article's own row
+            fetch(f)
+        self.assertEqual(self.lib.on_card(), {"102"})
+        row = sync_row()
+        self.assertEqual(row["title"], "Sync all (3 new)")
+        self.assertEqual(len(row["files"]), 6)
+        for f in row["files"]:                         # a whole sync
+            self.assertEqual(fetch(f), 200)
+        self.assertEqual(self.lib.on_card(), {"101", "102", "fb201", "fb202"})
+        self.assertNotEqual(sync_row()["id"], "sync-all")   # nothing new: no Sync all row
+
+        self.lib.mark_on_card(["101"], replace=True)   # a home tidy-up saw only one
+        self.assertEqual(sync_row()["title"], "Sync all (3 new)")
+        self.get("/progress", method="POST", body={"id": "fb201", "percent": "10"})
+        self.assertEqual(sync_row()["title"], "Sync all (2 new)")
 
     def test_bundle_files_and_epub(self):
         st, b = self.get(f"/f/{TOKEN}/First-Article.epub", auth=False)
@@ -213,6 +246,7 @@ class ReaderSyncTest(unittest.TestCase):
                 self.assertNotIn(gone, card)
             self.assertEqual(sorted(res["added"]), ["First-Article-fb202", "Starred-One"])
             self.assertEqual(json.loads(card["/Paperboy/Starred-One.epub.meta.json"]), {"paperboy_id": "fb201"})
+            self.assertEqual(lib.on_card(), {"101", "102", "fb201", "fb202"})
             again = reader_sync.sync_pass(lib, host, server.sidecar_bytes, server.files_for, dry_run=True)
             self.assertEqual(again, {"would_delete": [], "would_add": []})
             # An empty reading list must never purge.
