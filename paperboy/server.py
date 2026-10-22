@@ -44,7 +44,7 @@ from .log import log
 LIST_TTL = 60          # seconds to reuse a source's list
 MAX_PAGE = 16          # firmware page_size is 1..16
 WARM_EVERY = 600       # seconds between pre-build passes
-EPUB_VERSION = "v3"    # bump when the EPUB design changes; old cache entries go unused
+EPUB_VERSION = "v4"    # bump when the EPUB design changes; old cache entries go unused
 SYNC_ID = "sync-all"
 SIDECAR_KEY = "paperboy_id"
 LEGACY_SIDECAR_KEYS = ("instapaper_id",)
@@ -250,6 +250,10 @@ class Library:
 
     # --- finishing ---
 
+    def finish_at(self, item_id):
+        p = self.cache_path(item_id)
+        return epub.finish_at(p) if os.path.exists(p) else None
+
     def _finished(self):
         try:
             with open(self.finished_path) as f:
@@ -284,7 +288,8 @@ def files_for(item):
 
 
 def sidecar_bytes(item_id):
-    return json.dumps({SIDECAR_KEY: item_id}).encode()
+    # "epub" lets the home tidy-up spot copies built to an older design.
+    return json.dumps({SIDECAR_KEY: item_id, "epub": EPUB_VERSION}).encode()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -480,8 +485,12 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             log(f"progress {item_id}: ignored, no percent ({pct_s!r})")
             return self._send(200, {"ok": True, "ignored": "no percent"})
-        if pct < float(self.lib.cfg["archive_at"]):
-            log(f"progress {item_id}: {pct:g}%, not finished")
+        need = float(self.lib.cfg["archive_at"])
+        end = self.lib.finish_at(item_id)
+        if end is not None:
+            need = min(need, end)   # reaching the end page counts, however short the piece
+        if pct < need:
+            log(f"progress {item_id}: {pct:g}% (finished at {need:g}%), not finished")
             return self._send(200, {"ok": True, "finished": False, "percent": pct})
         self.lib.finish(item_id, f"read {pct:g}% event={body.get('event_id', '')}")
         self._send(200, {"ok": True, "finished": True})

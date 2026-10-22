@@ -166,9 +166,19 @@ class ServerTest(unittest.TestCase):
         self.assertNotIn("alt text", art)                 # images replace alt text; failed ones vanish
         self.assertIn("OEBPS/cover.jpg", z.namelist())
         st, b = self.get(f"/f/{TOKEN}/First-Article.epub.meta.json", auth=False)
-        self.assertEqual(json.loads(b), {"paperboy_id": "101"})
+        self.assertEqual(json.loads(b), {"paperboy_id": "101", "epub": server.EPUB_VERSION})
         self.assertEqual(self.get(f"/f/nope/First-Article.epub", auth=False)[0], 401)
         self.assertEqual(self.get(f"/f/{TOKEN}/Nope.epub", auth=False)[0], 404)
+
+    def test_end_page_counts_as_finished(self):
+        p = self.lib.epub_path("101")
+        with zipfile.ZipFile(p) as z:
+            self.assertIn("OEBPS/end.xhtml", z.namelist())
+        end = self.lib.finish_at("101")
+        self.assertTrue(0 < end < 95)                     # a short piece: the end page starts early
+        post = lambda pct: json.loads(self.get("/progress", method="POST", body={"id": "101", "percent": pct})[1])
+        self.assertFalse(post(str(end - 1))["finished"])
+        self.assertTrue(post(str(end))["finished"])
 
     def test_progress(self):
         ip, fb = self.lib.sources["instapaper"], self.lib.sources["feedbin"]
@@ -236,7 +246,7 @@ class FakeReader(BaseHTTPRequestHandler):
 class ReaderSyncTest(unittest.TestCase):
     def test_sync_and_purge(self):
         lib = make_library()
-        meta = lambda i, k="paperboy_id": json.dumps({k: i})
+        meta = lambda i, k="paperboy_id": json.dumps({k: i, "epub": server.EPUB_VERSION})
         FakeReader.card = {
             "/Paperboy/First-Article.epub": "<epub>",
             "/Paperboy/First-Article.epub.meta.json": meta("101"),
@@ -263,7 +273,8 @@ class ReaderSyncTest(unittest.TestCase):
             for gone in ["/Paperboy/Old-Copy.epub", "/Instapaper/Done.epub", "/Paperboy/Gone.epub.meta.json"]:
                 self.assertNotIn(gone, card)
             self.assertEqual(sorted(res["added"]), ["First-Article-fb202", "Starred-One"])
-            self.assertEqual(json.loads(card["/Paperboy/Starred-One.epub.meta.json"]), {"paperboy_id": "fb201"})
+            self.assertEqual(json.loads(card["/Paperboy/Starred-One.epub.meta.json"]),
+                             {"paperboy_id": "fb201", "epub": server.EPUB_VERSION})
             self.assertEqual(lib.on_card(), {"101", "102", "fb201", "fb202"})
             again = reader_sync.sync_pass(lib, host, server.sidecar_bytes, server.files_for, dry_run=True)
             self.assertEqual(again, {"would_delete": [], "would_add": []})
@@ -273,6 +284,25 @@ class ReaderSyncTest(unittest.TestCase):
             lib.forget_lists()
             self.assertEqual(reader_sync.sync_pass(lib, host, server.sidecar_bytes, server.files_for,
                                                    dry_run=True)["would_delete"], [])
+        finally:
+            srv.shutdown()
+
+    def test_replaces_copies_built_to_an_older_design(self):
+        lib = make_library()
+        FakeReader.card = {
+            "/Paperboy/First-Article.epub": "<old design>",
+            "/Paperboy/First-Article.epub.meta.json": json.dumps({"paperboy_id": "101"}),   # pre-version
+        }
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), FakeReader)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        host = f"127.0.0.1:{srv.server_address[1]}"
+        try:
+            res = reader_sync.sync_pass(lib, host, server.sidecar_bytes, server.files_for)
+            self.assertIn("First-Article", res["added"])
+            self.assertEqual(json.loads(FakeReader.card["/Paperboy/First-Article.epub.meta.json"])["epub"],
+                             server.EPUB_VERSION)
+            self.assertEqual(reader_sync.sync_pass(lib, host, server.sidecar_bytes, server.files_for,
+                                                   dry_run=True), {"would_delete": [], "would_add": []})
         finally:
             srv.shutdown()
 

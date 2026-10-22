@@ -301,10 +301,12 @@ OPF = """<?xml version="1.0" encoding="UTF-8"?>
   </metadata>
   <manifest>
     <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>{cover_manifest}
-    <item id="article" href="article.xhtml" media-type="application/xhtml+xml"/>{image_manifest}
+    <item id="article" href="article.xhtml" media-type="application/xhtml+xml"/>
+    <item id="end" href="end.xhtml" media-type="application/xhtml+xml"/>{image_manifest}
   </manifest>
   <spine>{cover_spine}
     <itemref idref="article"/>
+    <itemref idref="end"/>
   </spine>
 </package>
 """
@@ -336,6 +338,18 @@ NAV = """<?xml version="1.0" encoding="UTF-8"?>
 </html>
 """
 
+# A last page of its own. The reader reports progress from the top of the
+# current page, so the article's own last page reads as (n-1)/n of it: a
+# 12-page piece tops out at 92%. Turning onto this page is what "finished"
+# means; finish_at() works out the percent it starts at.
+END = """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+<head><meta charset="utf-8"/><title>The end</title>
+<style>body {{ font-family: Georgia, serif; text-align: center; margin-top: 30%; }}</style></head>
+<body><p>&#8212; The end &#8212;</p><p><small>Leave the book now and it&#8217;s marked done.</small></p></body>
+</html>
+"""
 ARTICLE = """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" lang="en">
@@ -366,6 +380,23 @@ def slugify(s):
     s = re.sub(r"[^\w\s-]", "", s.lower()).strip()
     s = re.sub(r"[\s_-]+", "-", s)
     return s[:60].strip("-") or "article"
+
+
+def finish_at(path):
+    """Percent the reader reports on reaching the end page, or None for an
+    EPUB without one. CrossPoint weighs each spine item by its uncompressed
+    size, so this is the share of the book that comes before end.xhtml."""
+    try:
+        with zipfile.ZipFile(path) as z:
+            sizes = {i.filename: i.file_size for i in z.infolist()}
+    except (OSError, zipfile.BadZipFile):
+        return None
+    spine = [f"OEBPS/{n}" for n in ("cover.xhtml", "article.xhtml", "end.xhtml")
+             if f"OEBPS/{n}" in sizes]
+    if not spine or spine[-1] != "OEBPS/end.xhtml":
+        return None
+    total = sum(sizes[n] for n in spine)
+    return int(100 * (total - sizes[spine[-1]]) / total)
 
 
 def build_epub(art, path):
@@ -429,6 +460,7 @@ def build_epub(art, path):
             z.writestr("OEBPS/" + cover_name, cover_bytes, compress_type=zipfile.ZIP_STORED)
             z.writestr("OEBPS/cover.xhtml", cover_page)
         z.writestr("OEBPS/article.xhtml", article_x)
+        z.writestr("OEBPS/end.xhtml", END.format())
         for href, data in art.get("images") or []:
             z.writestr("OEBPS/" + href, data, compress_type=zipfile.ZIP_STORED)
     os.replace(tmp, path)

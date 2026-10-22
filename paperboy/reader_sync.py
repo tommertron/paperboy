@@ -33,7 +33,7 @@ DISCOVERY_PORT = 8134
 POLL = 60
 HTTP_TIMEOUT = 20
 
-_sidecar_cache = {}  # (path, size) -> id or ""
+_sidecar_cache = {}  # (path, size) -> (id or "", epub design version or "")
 
 
 def discover(broadcasts, last_ip=None, timeout=2.0):
@@ -98,8 +98,8 @@ class Reader:
 
 
 def card_state(reader):
-    """({id: [epub paths]}, [orphan sidecar paths], main_folder_exists)."""
-    have, orphans = {}, []
+    """({id: [epub paths]}, [orphan sidecar paths], main_folder_exists, {epub path: version})."""
+    have, orphans, versions = {}, [], {}
     # Listing a folder that doesn't exist answers [] rather than 404 on
     # CrossPoint 2.0.0rc, so check the root for the folder itself.
     exists = any(e.get("isDirectory") and e.get("name") == FOLDER.strip("/")
@@ -121,19 +121,20 @@ def card_state(reader):
             if (path, size) not in _sidecar_cache:
                 try:
                     meta = json.loads(reader.read(path).decode("utf-8", "replace"))
-                    _sidecar_cache[(path, size)] = next(
-                        (str(meta[k]) for k in SIDECAR_KEYS if meta.get(k)), "")
+                    _sidecar_cache[(path, size)] = (next(
+                        (str(meta[k]) for k in SIDECAR_KEYS if meta.get(k)), ""), str(meta.get("epub", "")))
                 except (OSError, ValueError):
-                    _sidecar_cache[(path, size)] = ""
-            item_id = _sidecar_cache[(path, size)]
+                    _sidecar_cache[(path, size)] = ("", "")
+            item_id, version = _sidecar_cache[(path, size)]
             if not item_id:
                 continue  # another plugin's sidecar
             epub = name[:-len(".meta.json")]
             if epub in files:
                 have.setdefault(item_id, []).append(f"{folder}/{epub}")
+                versions[f"{folder}/{epub}"] = version
             else:
                 orphans.append(path)
-    return have, orphans, exists
+    return have, orphans, exists, versions
 
 
 def sync_pass(lib, host, sidecar_bytes, files_for, dry_run=False):
@@ -143,9 +144,9 @@ def sync_pass(lib, host, sidecar_bytes, files_for, dry_run=False):
         return None
     items = lib.catalog()   # raises on any source failure -> no pass at all
     want = {i["id"]: i for i in items}
-    have, orphans, exists = card_state(reader)
+    have, orphans, exists, versions = card_state(reader)
 
-    delete, removed = list(orphans), []
+    delete, removed, outdated = list(orphans), [], []
     for item_id, epubs in have.items():
         if item_id not in want:
             if items:   # never purge against an empty reading list
@@ -155,13 +156,20 @@ def sync_pass(lib, host, sidecar_bytes, files_for, dry_run=False):
         canonical = f"{FOLDER}/{want[item_id]['name']}.epub"
         keep = canonical if canonical in epubs else sorted(epubs)[0]
         delete += [p for e in epubs if e != keep for p in (e, e + ".meta.json")]
+        # Built to an older EPUB design (e.g. before the end page): swap it for
+        # a fresh copy. Reading position goes with it, as the reader keeps it
+        # in the book's cache, which an upload clears.
+        current = json.loads(sidecar_bytes(item_id)).get("epub", "")
+        if versions.get(keep) != current:
+            delete += [keep, keep + ".meta.json"]
+            outdated.append(item_id)
 
-    missing = [i for i in items if i["id"] not in have]
+    missing = [i for i in items if i["id"] not in have or i["id"] in outdated]
     if dry_run:
         return {"would_delete": delete, "would_add": [i["name"] for i in missing]}
     # Ground truth for what Sync all can skip, recorded before anything below
     # can fail; uploads are added as they land.
-    on_card = set(have) - set(removed)
+    on_card = set(have) - set(removed) - set(outdated)
     lib.mark_on_card(on_card, replace=True)
 
     if delete:

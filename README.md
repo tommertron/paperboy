@@ -4,7 +4,7 @@ Your unread [Instapaper](https://www.instapaper.com) articles and starred [Feedb
 
 - Browse your reading list on the reader and download articles as EPUBs, with title covers and the articles' images.
 - **Sync all** downloads, in one go, every article that isn't on the reader yet.
-- Finish an article and it's archived in Instapaper (or unstarred in Feedbin) the next time the reader is on Wi-Fi.
+- Turn onto an article's last page ("The end") and it's archived in Instapaper (or unstarred in Feedbin) the next time the reader is on Wi-Fi.
 - While the reader is in File Transfer mode on your home network, it's tidied to match your list: archived articles removed, new ones added.
 
 Two parts: this **server**, which you run at home and which talks to Instapaper and Feedbin, and a **CrossPoint plugin** on the reader. Your passwords stay on your server.
@@ -34,7 +34,7 @@ On first start a `token` is added to `data/config.json`. Then on the reader: ope
 | `instapaper` | | `consumer_key`, `consumer_secret`, `username`, `password` |
 | `feedbin` | | `email`, `password` |
 | `public_url` | | The address the reader uses, e.g. `https://example.com/paperboy`. Needed for Sync all. |
-| `archive_at` | `95` | Percent read that counts as finished |
+| `archive_at` | `95` | Percent read that counts as finished. Reaching an article's end page always counts, however short it is |
 | `port` | `17300` | |
 | `bind` | `0.0.0.0` | |
 | `reader_sync` | `true` | Tidy the reader while it's in File Transfer mode |
