@@ -77,6 +77,7 @@ class Library:
         self._card_lock = threading.Lock()
         self._offered = {}  # first file of a row's bundle -> (files, ids)
         self._runs = []     # bundle downloads in progress: [files, next index, ids]
+        self._building = set()  # ids being built now, so no two threads build one
 
     # --- lists ---
 
@@ -153,6 +154,29 @@ class Library:
         log(f"built {item_id} ({item['title'][:60]})")
         return path
 
+    def build(self, item_id):
+        """Build one article's EPUB unless it's cached or already being built."""
+        with self._lock:
+            if item_id in self._building or self.cached(item_id):
+                return
+            self._building.add(item_id)
+        try:
+            self.epub_path(item_id)
+        except Exception as e:
+            log(f"build failed for {item_id}: {e!r}")
+        finally:
+            with self._lock:
+                self._building.discard(item_id)
+
+    def build_soon(self, ids):
+        """Build new articles now rather than at the next pre-build pass, so
+        they join Sync all within seconds of the reader asking."""
+        with self._lock:
+            ids = [i for i in ids if i not in self._building]
+        if ids:
+            threading.Thread(target=lambda: [self.build(i) for i in ids],
+                             name="build-soon", daemon=True).start()
+
     def warm_loop(self):
         """Pre-build every article's EPUB so Sync all only offers ready files,
         and drop cache files nothing needs any more."""
@@ -160,11 +184,7 @@ class Library:
             try:
                 items = self.catalog()
                 for i in items:
-                    if not self.cached(i["id"]):
-                        try:
-                            self.epub_path(i["id"])
-                        except Exception as e:
-                            log(f"build failed for {i['id']}: {e!r}")
+                    self.build(i["id"])
                 keep = {os.path.basename(self.cache_path(i["id"])) for i in items}
                 for f in os.listdir(self.cache_dir):
                     if f.endswith(".epub") and f not in keep:
@@ -390,6 +410,8 @@ class Handler(BaseHTTPRequestHandler):
             on_card = self.lib.on_card()
             todo = [i for i in everything if i["id"] not in on_card]
             ready = [i for i in todo if self.lib.cached(i["id"])]
+            if len(ready) < len(todo):
+                self.lib.build_soon([i["id"] for i in todo if not self.lib.cached(i["id"])])
             n = len(ready)
             count = f"{n} new" if len(todo) < len(everything) else f"{n} articles"
             if n < len(todo):
@@ -444,14 +466,19 @@ class Handler(BaseHTTPRequestHandler):
         # arrive as "legacy_id". Unfilled templates arrive as literal "{meta...}".
         candidates = [str(body.get(k, "")).strip() for k in ("id", "legacy_id")]
         item_id = next((c for c in candidates if re.fullmatch(r"(?:fb)?\d+", c)), "")
+        # Every outcome answers 200, so log each one or a dud event leaves no trace.
+        pct_s = str(body.get("percent", ""))[:20]
         if not item_id:
+            log(f"progress ignored: no Paperboy id (id={candidates[0][:40]!r}, percent={pct_s!r})")
             return self._send(200, {"ok": True, "ignored": "not a Paperboy article"})
         self.lib.mark_on_card([item_id])   # the reader just closed it, so it has it
         try:
             pct = float(str(body.get("percent", "")).strip().rstrip("%"))
         except ValueError:
+            log(f"progress {item_id}: ignored, no percent ({pct_s!r})")
             return self._send(200, {"ok": True, "ignored": "no percent"})
         if pct < float(self.lib.cfg["archive_at"]):
+            log(f"progress {item_id}: {pct:g}%, not finished")
             return self._send(200, {"ok": True, "finished": False, "percent": pct})
         self.lib.finish(item_id, f"read {pct:g}% event={body.get('event_id', '')}")
         self._send(200, {"ok": True, "finished": True})

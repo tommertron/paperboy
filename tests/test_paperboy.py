@@ -139,6 +139,16 @@ class ServerTest(unittest.TestCase):
         self.get("/progress", method="POST", body={"id": "fb201", "percent": "10"})
         self.assertEqual(sync_row()["title"], "Sync all (2 new)")
 
+    def test_new_articles_are_built_on_first_ask(self):
+        st, b = self.get("/list/instapaper?page=1&limit=9")
+        self.assertNotEqual(json.loads(b)["items"][0]["id"], "sync-all")   # nothing built yet
+        for _ in range(100):                          # asking kicked off the builds
+            if all(self.lib.cached(i["id"]) for i in self.lib.catalog()):
+                break
+            time.sleep(0.05)
+        st, b = self.get("/list/instapaper?page=1&limit=9")
+        self.assertEqual(json.loads(b)["items"][0]["title"], "Sync all (4 articles)")
+
     def test_bundle_files_and_epub(self):
         st, b = self.get(f"/f/{TOKEN}/First-Article.epub", auth=False)
         self.assertEqual(st, 200)
