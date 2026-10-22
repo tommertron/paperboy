@@ -99,7 +99,11 @@ class Reader:
 
 def card_state(reader):
     """({id: [epub paths]}, [orphan sidecar paths], main_folder_exists)."""
-    have, orphans, exists = {}, [], False
+    have, orphans = {}, []
+    # Listing a folder that doesn't exist answers [] rather than 404 on
+    # CrossPoint 2.0.0rc, so check the root for the folder itself.
+    exists = any(e.get("isDirectory") and e.get("name") == FOLDER.strip("/")
+                 for e in reader.list("/"))
     for folder in (FOLDER,) + LEGACY_FOLDERS:
         try:
             entries = reader.list(folder)
@@ -109,7 +113,6 @@ def card_state(reader):
             continue
         if not isinstance(entries, list):
             continue
-        exists = exists or folder == FOLDER
         files = {e["name"]: e.get("size", 0) for e in entries if not e.get("isDirectory")}
         for name, size in files.items():
             if not name.endswith(".epub.meta.json"):
@@ -156,13 +159,17 @@ def sync_pass(lib, host, sidecar_bytes, files_for, dry_run=False):
     missing = [i for i in items if i["id"] not in have]
     if dry_run:
         return {"would_delete": delete, "would_add": [i["name"] for i in missing]}
+    # Ground truth for what Sync all can skip, recorded before anything below
+    # can fail; uploads are added as they land.
+    on_card = set(have) - set(removed)
+    lib.mark_on_card(on_card, replace=True)
 
     if delete:
         reader.delete(delete)
         gone = set(delete)
         for k in [k for k in _sidecar_cache if k[0] in gone]:
             del _sidecar_cache[k]
-    added, added_ids = [], []
+    added = []
     if missing and not exists:
         reader.mkdir("/", FOLDER.strip("/"))
     for i in missing:
@@ -176,9 +183,7 @@ def sync_pass(lib, host, sidecar_bytes, files_for, dry_run=False):
         # (retried next pass), never a sidecar pointing at nothing.
         reader.upload(FOLDER, meta_name, sidecar_bytes(i["id"]), "application/json")
         added.append(i["name"])
-        added_ids.append(i["id"])
-    # Ground truth for what Sync all can skip.
-    lib.mark_on_card((set(have) - set(removed)) | set(added_ids), replace=True)
+        lib.mark_on_card([i["id"]])
     return {"deleted": delete, "removed_ids": removed, "added": added}
 
 

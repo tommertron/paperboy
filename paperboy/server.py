@@ -4,8 +4,9 @@ CrossPoint's on-device plugins are declarative and can't sign OAuth requests,
 so this does the Instapaper/Feedbin side.
 
   GET  /health                       no auth; "ok"
-  GET  /lists?token=T                the reader's list picker (one entry per source)
-  GET  /list/<source>?page=&limit=   a source's articles, paged the way the firmware asks
+  GET  /lists?token=T                the reader's list picker: one combined list, so the
+                                     reader opens straight onto it
+  GET  /list/<source>?page=&limit=   articles ("all", "instapaper" or "feedbin"), paged the way the firmware asks
                                      (limit = page_size + 1); page 1 starts with Sync all
                                      (only articles not already on the reader)
   GET  /unread, /starred             aliases for /list/instapaper, /list/feedbin
@@ -48,6 +49,7 @@ SYNC_ID = "sync-all"
 SIDECAR_KEY = "paperboy_id"
 LEGACY_SIDECAR_KEYS = ("instapaper_id",)
 LIST_TITLES = {"instapaper": "Instapaper", "feedbin": "Feedbin starred"}
+ALL = "all"            # the combined list: the reader's only list, so it opens straight onto it
 
 
 def file_stem(title):
@@ -348,9 +350,10 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/lists":
                 if not self._token_ok((q.get("token") or [""])[0]):
                     return self._send(401, {"error": "unauthorized"})
+                # One list, so the firmware skips its picker and Sync all is
+                # the first thing on screen. /list/<source> still works.
                 return self._send(200, {"lists": [
-                    {"title": LIST_TITLES[s], "url": "{cfg.server}/list/" + s + "?page={page}&limit={limit}"}
-                    for s in self.lib.sources]})
+                    {"title": "Reading list", "url": "{cfg.server}/list/" + ALL + "?page={page}&limit={limit}"}]})
             m = re.fullmatch(r"/f/([^/]+)/([A-Za-z0-9-]+\.epub(?:\.meta\.json)?)", path)
             if m:
                 return self._file(m.group(1), m.group(2))
@@ -394,7 +397,7 @@ class Handler(BaseHTTPRequestHandler):
                 return default
         page, limit = num("page", 1), min(num("limit", 9), MAX_PAGE + 1)
         size = max(1, limit - 1)
-        if source not in self.lib.sources:
+        if source != ALL and source not in self.lib.sources:
             return self._send(200, {"total": 0, "items": []})
         base = self._base()
         try:
@@ -427,7 +430,7 @@ class Handler(BaseHTTPRequestHandler):
                 "files": [f for i in ready for f in reversed(files_for(i))],
             } if ready else None
         rows = [dict(i, base=base, files=files_for(i)) for i in everything
-                if self.lib.source_of(i["id"]) == source]
+                if source == ALL or self.lib.source_of(i["id"]) == source]
         for r in rows:
             self.lib.offer(r["files"], [r["id"]])
         if sync_row:

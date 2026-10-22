@@ -48,8 +48,8 @@ At least one of `instapaper` and `feedbin` is required.
 | Route | Auth | |
 |---|---|---|
 | `GET /health` | none | `ok` |
-| `GET /lists?token=` | token in URL | The reader's list picker |
-| `GET /list/<source>?page=&limit=` | Bearer | Articles, paged; page 1 starts with Sync all |
+| `GET /lists?token=` | token in URL | The reader's list picker: one combined list, so the reader opens straight onto it |
+| `GET /list/<source>?page=&limit=` | Bearer | Articles (`all`, `instapaper` or `feedbin`), paged; page 1 starts with Sync all |
 | `GET /f/<token>/<file>` | token in path | Bundle files: `<Name>.epub` and `<Name>.epub.meta.json` |
 | `GET /epub/<id>` | Bearer | One article's EPUB |
 | `POST /progress` | Bearer | `{"id", "percent", "event_id"}` from the reader |

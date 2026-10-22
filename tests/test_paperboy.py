@@ -85,12 +85,19 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.get("/list/instapaper", auth=False)[0], 401)
         self.assertEqual(self.get("/lists?token=wrong", auth=False)[0], 401)
 
-    def test_lists_follow_configured_sources(self):
+    def test_one_combined_list(self):
         st, b = self.get(f"/lists?token={TOKEN}", auth=False)
-        self.assertEqual([l["title"] for l in json.loads(b)["lists"]], ["Instapaper", "Feedbin starred"])
+        lists = json.loads(b)["lists"]
+        self.assertEqual(len(lists), 1)                 # one list: the reader skips its picker
+        self.assertIn("/list/all?", lists[0]["url"])
+        for i in self.lib.catalog():
+            self.lib.epub_path(i["id"])
+        rows = json.loads(self.get("/list/all?page=1&limit=17")[1])["items"]
+        self.assertEqual(rows[0]["title"], "Sync all (4 articles)")
+        self.assertEqual(sorted(r["id"] for r in rows[1:]), ["101", "102", "fb201", "fb202"])
         del self.lib.sources["feedbin"]
-        st, b = self.get(f"/lists?token={TOKEN}", auth=False)
-        self.assertEqual(len(json.loads(b)["lists"]), 1)
+        rows = json.loads(self.get("/list/all?page=1&limit=17")[1])["items"]
+        self.assertEqual(sorted(r["id"] for r in rows[1:]), ["101", "102"])
 
     def test_list_rows_names_and_sync_row(self):
         for i in self.lib.catalog():
@@ -195,12 +202,13 @@ class FakeReader(BaseHTTPRequestHandler):
         if u.path == "/api/status":
             return self._send(200, {"firmwareFamily": "crosspoint", "mode": "STA"})
         if u.path == "/api/files":
-            d = q["path"][0]
-            kids = [p[len(d) + 1:] for p in self.card if p.startswith(d + "/")]
-            if not kids and d not in self.card.get("__dirs__", []):
-                return self._send(404, {})
-            return self._send(200, [{"name": k, "size": len(self.card[d + "/" + k]), "isDirectory": False}
-                                    for k in kids if "/" not in k])
+            # Like CrossPoint 2.0.0rc: a missing folder lists as [], not 404.
+            d = q["path"][0].rstrip("/")
+            paths = [p for p in self.card if p != "__dirs__"] + self.card.get("__dirs__", [])
+            kids = {p[len(d) + 1:].split("/")[0] for p in paths if p.startswith(d + "/")}
+            return self._send(200, [{"name": k, "size": len(self.card.get(d + "/" + k, "")),
+                                     "isDirectory": d + "/" + k not in self.card}
+                                    for k in sorted(kids)])
         if u.path == "/download":
             return self._send(200, self.card[q["path"][0]].encode())
 
@@ -265,6 +273,21 @@ class ReaderSyncTest(unittest.TestCase):
             lib.forget_lists()
             self.assertEqual(reader_sync.sync_pass(lib, host, server.sidecar_bytes, server.files_for,
                                                    dry_run=True)["would_delete"], [])
+        finally:
+            srv.shutdown()
+
+    def test_creates_a_deleted_folder(self):
+        lib = make_library()
+        lib.mark_on_card(["101", "102", "fb201", "fb202"])   # then the user deleted /Paperboy
+        FakeReader.card = {"/Books/Novel.epub": "<not ours>"}
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), FakeReader)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            res = reader_sync.sync_pass(lib, f"127.0.0.1:{srv.server_address[1]}",
+                                        server.sidecar_bytes, server.files_for)
+            self.assertIn("/Paperboy", FakeReader.card["__dirs__"])
+            self.assertEqual(len(res["added"]), 4)
+            self.assertEqual(lib.on_card(), {"101", "102", "fb201", "fb202"})
         finally:
             srv.shutdown()
 
