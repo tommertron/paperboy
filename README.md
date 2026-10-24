@@ -23,6 +23,8 @@ curl -o data/config.json https://raw.githubusercontent.com/tommertron/paperboy/m
 docker compose up -d
 ```
 
+No Docker? It's plain Python 3.9+ (`requests` and `Pillow`) and runs fine on a Mac; see [On a Mac, without Docker](https://coefficiencies.com/apps/paperboy/#on-a-mac-without-docker) for a launch agent setup.
+
 On first start a `token` is added to `data/config.json`. Then on the reader: open **Plugin Hub** in its web page, add the custom catalog `https://coefficiencies.com/crosspoint/catalog.json`, install **Paperboy**, and enter your server URL and token on the **Paperboy** card under Settings.
 
 ## Configuration

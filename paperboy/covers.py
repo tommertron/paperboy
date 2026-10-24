@@ -7,7 +7,8 @@ instapaper_to_epub.fetch_cover(). art["cover"] is the raw lead image from
 fetch_cover() or None. Output is a BASELINE RGB JPEG: the reader's decoder is
 on an ESP32, and progressive JPEGs are the usual thing such decoders refuse.
 
-Pillow + system fonts (Debian packages fonts-liberation and fonts-lato).
+Pillow + system fonts: Debian's fonts-liberation and fonts-lato in the Docker
+image, or the fonts macOS ships with.
 """
 import io
 import re
@@ -18,17 +19,23 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 W, H = 600, 900                 # 2:3, scales cleanly to the 480x800 panel
 MARGIN = 40
 IMAGE_H = 520                   # lead image band when there is an image
-SERIF_BOLD = "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf"
-SANS = "/usr/share/fonts/truetype/lato/Lato-Medium.ttf"
-SANS_BOLD = "/usr/share/fonts/truetype/lato/Lato-Bold.ttf"
+# Each font is a list of candidates, first one found wins: Debian, then macOS
+SERIF_BOLD = ["/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf",
+              "/System/Library/Fonts/Supplemental/Georgia Bold.ttf"]
+SANS = ["/usr/share/fonts/truetype/lato/Lato-Medium.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf"]
+SANS_BOLD = ["/usr/share/fonts/truetype/lato/Lato-Bold.ttf",
+             "/System/Library/Fonts/Supplemental/Arial Bold.ttf"]
 INK, PAPER, GREY = (0, 0, 0), (255, 255, 255), (90, 90, 90)
 
 
-def _font(path, size):
-    try:
-        return ImageFont.truetype(path, size)
-    except OSError:
-        return ImageFont.load_default()
+def _font(paths, size):
+    for path in paths:
+        try:
+            return ImageFont.truetype(path, size)
+        except OSError:
+            pass
+    return ImageFont.load_default()
 
 
 def _wrap(draw, text, font, width):
