@@ -1,8 +1,15 @@
-"""Instapaper Full API (api/1) client, stdlib only.
+"""Instapaper clients, stdlib only.
 
-Uses xAuth (consumer key/secret + the account's username/password) to get a
-long-lived access token, cached in the data directory and re-requested only
-when missing or rejected.
+InstapaperV2 (API v2) authenticates with a bearer token: a personal access
+token generated on instapaper.com/developers/applications. This is the one to
+use.
+
+InstapaperV1 (the Full API, api/1) is the original: xAuth with a consumer
+key/secret + the account's username/password to get a long-lived access token,
+cached in the data directory. Instapaper turns xAuth off on 2027-09-30; it's
+kept so configs written before v2 keep working until then.
+
+Instapaper(creds) picks one from the config section.
 """
 import base64
 import datetime
@@ -20,6 +27,13 @@ import uuid
 from .config import data_path
 
 API_BASE = "https://www.instapaper.com/api/1"
+API2_BASE = "https://www.instapaper.com/api/2"
+USER_AGENT = "Paperboy (+https://github.com/tommertron/paperboy)"
+PAGE = 500  # API v2's largest page
+
+
+def Instapaper(creds):
+    return InstapaperV2(creds) if creds.get("access_token") else InstapaperV1(creds)
 
 
 def _sign(method, url, params, consumer_secret, token_secret=""):
@@ -31,7 +45,7 @@ def _sign(method, url, params, consumer_secret, token_secret=""):
     return base64.b64encode(hmac.new(key.encode(), base.encode(), hashlib.sha1).digest()).decode()
 
 
-class Instapaper:
+class InstapaperV1:
     source = "instapaper"
 
     def __init__(self, creds):
@@ -127,6 +141,79 @@ class Instapaper:
 
     def finish(self, item_id):
         self.api("/bookmarks/archive", {"bookmark_id": item_id})
+
+
+class InstapaperV2:
+    source = "instapaper"
+    base = API2_BASE
+
+    def __init__(self, creds):
+        self.access_token = creds["access_token"]
+
+    def api(self, method, path, query=None, body=None):
+        url = self.base + path + ("?" + urllib.parse.urlencode(query) if query else "")
+        headers = {"Authorization": f"Bearer {self.access_token}", "User-Agent": USER_AGENT,
+                   "Accept": "application/json"}
+        data = None
+        if body is not None:
+            data = json.dumps(body).encode()
+            headers["Content-Type"] = "application/json"
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                raw = r.read()
+        except urllib.error.HTTPError as e:
+            try:
+                msg = json.loads(e.read().decode())["error"]["message"]
+            except Exception:
+                msg = e.reason
+            if e.code == 401:
+                msg += " (check instapaper.access_token in config.json)"
+            raise RuntimeError(f"Instapaper {method} {path}: {e.code} {msg}") from None
+        return json.loads(raw.decode()) if raw.strip() else None
+
+    # --- what the server uses ---
+
+    def items(self):
+        """Unread bookmarks, newest first, as reader-list items."""
+        bookmarks, offset = [], 0
+        while True:
+            page = self.api("GET", "/bookmarks", {"section": "home", "limit": PAGE, "offset": offset})
+            got = page.get("bookmarks") or []
+            bookmarks += got
+            offset += len(got)
+            if not got or offset >= page.get("total", 0):
+                break
+        bookmarks.sort(key=lambda b: b.get("time") or 0, reverse=True)
+        out = []
+        for b in bookmarks:
+            try:
+                d = datetime.date.fromtimestamp(float(b.get("time")))
+            except (TypeError, ValueError):
+                d = datetime.date.today()
+            url = b.get("url") or ""
+            out.append({
+                "id": str(b["id"]),
+                "title": b.get("title") or "",
+                "url": url,
+                "site": _site(url),
+                "date": d.isoformat(),
+                "description": b.get("description") or "",
+                "author": b.get("author") or "",
+            })
+        return out
+
+    def article_html(self, item):
+        """(html, lead_image_url or None, author) for one item."""
+        parsed = self.api("GET", f"/bookmarks/{item['id']}/parse")
+        meta, content = parsed.get("metadata") or {}, parsed.get("content") or {}
+        author = meta.get("author") or ""
+        if isinstance(author, dict):
+            author = author.get("name") or ""
+        return content.get("body") or "", meta.get("thumbnail") or None, author
+
+    def finish(self, item_id):
+        self.api("POST", f"/bookmarks/{item_id}/move", body={"section": "archive"})
 
 
 def _site(url):

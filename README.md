@@ -13,7 +13,7 @@ Full setup guide: https://coefficiencies.com/apps/paperboy/
 
 ## Quick start
 
-You need Docker, a CrossPoint reader on firmware 2.0 or later, and an [Instapaper API key](https://www.instapaper.com/main/request_oauth_consumer_token) (and/or a Feedbin account).
+You need Docker, a CrossPoint reader on firmware 2.0 or later, and an Instapaper personal access token (and/or a Feedbin account). To get the token, create an application at [instapaper.com/developers/applications](https://www.instapaper.com/developers/applications) and generate a personal access token for it.
 
 ```sh
 mkdir -p paperboy/data && cd paperboy
@@ -33,7 +33,7 @@ On first start a `token` is added to `data/config.json`. Then on the reader: ope
 
 | Key | Default | |
 |---|---|---|
-| `instapaper` | | `consumer_key`, `consumer_secret`, `username`, `password` |
+| `instapaper` | | `access_token`: a personal access token (Instapaper API v2). Configs from before 1.1 with `consumer_key`, `consumer_secret`, `username` and `password` still work until Instapaper turns xAuth off on 2027-09-30 |
 | `feedbin` | | `email`, `password` |
 | `public_url` | | The address the reader uses, e.g. `https://example.com/paperboy`. Needed for Sync all. |
 | `archive_at` | `95` | Percent read that counts as finished. Reaching an article's end page always counts, however short it is |

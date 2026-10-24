@@ -1,9 +1,6 @@
 {
   "instapaper": {
-    "consumer_key": "from Instapaper's API key email",
-    "consumer_secret": "from Instapaper's API key email",
-    "username": "you@example.com",
-    "password": "your Instapaper password"
+    "access_token": "your personal access token from instapaper.com/developers/applications"
   },
   "feedbin": {
     "email": "you@example.com",

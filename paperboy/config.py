@@ -1,7 +1,9 @@
 """Settings: one JSON file in the data directory (PAPERBOY_DATA, default /data).
 
 {
-  "instapaper": {"consumer_key", "consumer_secret", "username", "password"},   optional
+  "instapaper": {"access_token"},          optional; a personal access token (API v2).
+                                           Or, until xAuth ends on 2027-09-30, the old
+                                           {"consumer_key", "consumer_secret", "username", "password"}
   "feedbin":    {"email", "password"},                                        optional
   "public_url": "https://host/paperboy",  the address the reader uses (for bundle downloads)
   "archive_at": 95,                        percent read that counts as finished
@@ -51,8 +53,11 @@ def load():
     ip, fb = cfg.get("instapaper"), cfg.get("feedbin")
     if not ip and not fb:
         raise ConfigError("config needs an \"instapaper\" section, a \"feedbin\" section, or both")
-    if ip:
+    if ip and not ip.get("access_token"):
         missing = [k for k in ("consumer_key", "consumer_secret", "username", "password") if not ip.get(k)]
+        if len(missing) == 4:
+            raise ConfigError("instapaper section needs an \"access_token\" (a personal access token from "
+                              "instapaper.com/developers/applications)")
         if missing:
             raise ConfigError("instapaper section is missing: " + ", ".join(missing))
     if fb:

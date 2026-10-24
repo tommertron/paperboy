@@ -5,6 +5,7 @@ Run: python3 -m unittest discover -s tests -v
 import io
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -12,6 +13,7 @@ import threading
 import time
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -21,7 +23,7 @@ sys.path.insert(0, ROOT)
 DATA = tempfile.mkdtemp(prefix="paperboy-test-")
 os.environ["PAPERBOY_DATA"] = DATA
 
-from paperboy import config, epub, reader_sync, server  # noqa: E402
+from paperboy import config, epub, instapaper, reader_sync, server  # noqa: E402
 
 TOKEN = "test-token-1234567890"
 
@@ -326,6 +328,90 @@ class ReaderSyncTest(unittest.TestCase):
         lib.sources["feedbin"].items = lambda: (_ for _ in ()).throw(urllib.error.URLError("down"))
         with self.assertRaises(urllib.error.URLError):
             lib.catalog()
+
+
+class FakeInstapaperV2(BaseHTTPRequestHandler):
+    """API v2, enough of it: paged home list, parse, move."""
+    bookmarks = [{"id": 900 + i, "title": f"Saved {i}", "url": f"https://www.site{i}.com/a", "time": 1790000000 + i,
+                  "author": "Byline" if i == 0 else None} for i in range(5)]
+    moved = []
+
+    def log_message(self, *a):
+        pass
+
+    def reply(self, code, obj):
+        body = json.dumps(obj).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def authed(self):
+        if self.headers.get("Authorization") != "Bearer pat-123":
+            self.reply(401, {"error": {"code": 401, "message": "Authentication failed"}})
+            return False
+        return True
+
+    def do_GET(self):
+        if not self.authed():
+            return
+        u = urllib.parse.urlparse(self.path)
+        q = dict(urllib.parse.parse_qsl(u.query))
+        if u.path == "/bookmarks":
+            assert q["section"] == "home"
+            off, lim = int(q.get("offset", 0)), 2   # pretend the page size is 2, to exercise paging
+            return self.reply(200, {"bookmarks": self.bookmarks[off:off + lim], "total": len(self.bookmarks)})
+        m = re.match(r"/bookmarks/(\d+)/parse$", u.path)
+        if m:
+            return self.reply(200, {"metadata": {"author": {"name": "Parsed Author", "url": None},
+                                                 "thumbnail": "https://img.example/lead.jpg"},
+                                    "content": {"body": f"<p>Article {m.group(1)}</p>", "words": 2}})
+        self.reply(404, {"error": {"code": 404, "message": "nope"}})
+
+    def do_POST(self):
+        if not self.authed():
+            return
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        m = re.match(r"/bookmarks/(\d+)/move$", self.path)
+        FakeInstapaperV2.moved.append((m.group(1), body["section"]))
+        self.reply(200, {"id": int(m.group(1))})
+
+
+class InstapaperV2Test(unittest.TestCase):
+    def setUp(self):
+        self.srv = ThreadingHTTPServer(("127.0.0.1", 0), FakeInstapaperV2)
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        self.base = f"http://127.0.0.1:{self.srv.server_address[1]}"
+
+    def tearDown(self):
+        self.srv.shutdown()
+
+    def client(self, token="pat-123"):
+        c = instapaper.Instapaper({"access_token": token})
+        self.assertIsInstance(c, instapaper.InstapaperV2)
+        c.base = self.base
+        return c
+
+    def test_list_parse_archive(self):
+        c = self.client()
+        items = c.items()
+        self.assertEqual([i["id"] for i in items], ["904", "903", "902", "901", "900"])  # every page, newest first
+        self.assertEqual(items[-1]["site"], "site0.com")
+        self.assertEqual(items[-1]["author"], "Byline")
+        html, lead, author = c.article_html(items[0])
+        self.assertEqual((html, lead, author), ("<p>Article 904</p>", "https://img.example/lead.jpg", "Parsed Author"))
+        FakeInstapaperV2.moved.clear()
+        c.finish("903")
+        self.assertEqual(FakeInstapaperV2.moved, [("903", "archive")])
+
+    def test_bad_token_says_so(self):
+        with self.assertRaisesRegex(RuntimeError, "401 Authentication failed.*access_token"):
+            self.client("wrong").items()
+
+    def test_config_picks_the_client(self):
+        self.assertIsInstance(instapaper.Instapaper({"consumer_key": "k", "consumer_secret": "s",
+                                                     "username": "u", "password": "p"}), instapaper.InstapaperV1)
 
 
 class EpubTest(unittest.TestCase):
