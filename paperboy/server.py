@@ -4,6 +4,11 @@ CrossPoint's on-device plugins are declarative and can't sign OAuth requests,
 so this does the Instapaper/Feedbin side.
 
   GET  /health                       no auth; "ok"
+  GET  /                             the web page (no data in it; it asks for the token)
+  GET  /status                       what the web page shows: articles, what's on the
+                                     card, finished ids, last home tidy-up
+  POST /finish {"id"}                archive/unstar an article now, from the web page
+  POST /refresh                      re-read the sources on the next ask
   GET  /lists?token=T                the reader's list picker: one combined list, so the
                                      reader opens straight onto it
   GET  /list/<source>?page=&limit=   articles ("all", "instapaper" or "feedbin"), paged the way the firmware asks
@@ -49,6 +54,7 @@ SYNC_ID = "sync-all"
 SIDECAR_KEY = "paperboy_id"
 LEGACY_SIDECAR_KEYS = ("instapaper_id",)
 LIST_TITLES = {"instapaper": "Instapaper", "feedbin": "Feedbin starred"}
+UI_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui.html")
 ALL = "all"            # the combined list: the reader's only list, so it opens straight onto it
 
 
@@ -248,6 +254,36 @@ class Library:
         if done:
             self.mark_on_card(done)
 
+    # --- the web page ---
+
+    def status(self):
+        on_card, finished = self.on_card(), self._finished()
+        errors, items = {}, []
+        for source in self.sources:
+            try:
+                items += [dict(i, source=source) for i in self.items(source)]
+            except Exception as e:
+                errors[source] = str(e)
+        try:
+            with open(config.data_path("reader_sync.json")) as f:
+                tidy = json.load(f)
+        except (OSError, ValueError):
+            tidy = {}
+        return {
+            "version": __version__,
+            "sources": list(self.sources),
+            "archive_at": self.cfg["archive_at"],
+            "reader_sync": bool(self.cfg["reader_sync"]),
+            "errors": errors,
+            "articles": [{k: i.get(k, "") for k in ("id", "title", "site", "date", "url", "source")}
+                         | {"ready": self.cached(i["id"]), "on_card": i["id"] in on_card}
+                         for i in items],
+            "finished_count": len(finished),
+            "last_tidy": tidy.get("last_sync"),
+            "last_tidy_result": tidy.get("last_result"),
+            "reader_ip": tidy.get("last_ip"),
+        }
+
     # --- finishing ---
 
     def finish_at(self, item_id):
@@ -352,6 +388,10 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == "/health":
                 return self._send(200, "ok", "text/plain")
+            if path in ("/", "/ui"):
+                with open(UI_PATH, "rb") as f:
+                    return self._send(200, f.read(), "text/html; charset=utf-8",
+                                      {"Cache-Control": "no-cache"})
             if path == "/lists":
                 if not self._token_ok((q.get("token") or [""])[0]):
                     return self._send(401, {"error": "unauthorized"})
@@ -372,6 +412,8 @@ class Handler(BaseHTTPRequestHandler):
             m = re.fullmatch(r"/epub/((?:fb)?\d+)(?:\.epub)?", path)
             if m:
                 return self._epub(m.group(1))
+            if path == "/status":
+                return self._send(200, self.lib.status())
         except Exception as e:
             log(f"ERROR {path}: {e!r}")
             return self._send(502, {"error": str(e)})
@@ -383,16 +425,28 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             if path == "/progress":
-                n = int(self.headers.get("Content-Length") or 0)
-                try:
-                    body = json.loads(self.rfile.read(min(n, 8192)).decode() or "{}")
-                except ValueError:
-                    body = {}
-                return self._progress(body)
+                return self._progress(self._json_body())
+            if path == "/finish":
+                item_id = str(self._json_body().get("id", ""))
+                if not re.fullmatch(r"(?:fb)?\d+", item_id):
+                    return self._send(400, {"error": "no article id"})
+                self.lib.finish(item_id, "marked finished on the web page")
+                return self._send(200, {"ok": True})
+            if path == "/refresh":
+                self.lib.forget_lists()
+                return self._send(200, {"ok": True})
         except Exception as e:
             log(f"ERROR {path}: {e!r}")
             return self._send(502, {"error": str(e)})
         self._send(404, {"error": "not found"})
+
+    def _json_body(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        try:
+            body = json.loads(self.rfile.read(min(n, 8192)).decode() or "{}")
+        except ValueError:
+            body = {}
+        return body if isinstance(body, dict) else {}
 
     def _page(self, q, source):
         def num(key, default):

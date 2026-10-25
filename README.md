@@ -45,11 +45,19 @@ On first start a `token` is added to `data/config.json`. Then on the reader: ope
 
 At least one of `instapaper` and `feedbin` is required.
 
+## Web page
+
+Open the server's address in a browser (for example `http://localhost:17300/`) and sign in with the token. You get the reading list, which articles are already on the reader, the last home tidy-up, an EPUB download for each article, and a **Finished** button that archives or unstars an article without reading it on the reader.
+
 ## Server API
 
 | Route | Auth | |
 |---|---|---|
 | `GET /health` | none | `ok` |
+| `GET /` | none | The web page: your reading list, what's on the reader, and a Finished button. It asks for the token |
+| `GET /status` | Bearer | What the web page shows |
+| `POST /finish` | Bearer | `{"id"}`: archive or unstar an article now |
+| `POST /refresh` | Bearer | Re-read Instapaper/Feedbin on the next request |
 | `GET /lists?token=` | token in URL | The reader's list picker: one combined list, so the reader opens straight onto it |
 | `GET /list/<source>?page=&limit=` | Bearer | Articles (`all`, `instapaper` or `feedbin`), paged; page 1 starts with Sync all |
 | `GET /f/<token>/<file>` | token in path | Bundle files: `<Name>.epub` and `<Name>.epub.meta.json` |

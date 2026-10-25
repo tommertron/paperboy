@@ -101,6 +101,21 @@ class ServerTest(unittest.TestCase):
         rows = json.loads(self.get("/list/all?page=1&limit=17")[1])["items"]
         self.assertEqual(sorted(r["id"] for r in rows[1:]), ["101", "102"])
 
+    def test_web_page_status_and_finish(self):
+        st, b = self.get("/paperboy/", auth=False)
+        self.assertEqual(st, 200)
+        self.assertIn(b"<title>Paperboy</title>", b)
+        self.assertNotIn(TOKEN.encode(), b)
+        self.assertEqual(self.get("/status", auth=False)[0], 401)
+        self.lib.mark_on_card(["101"])
+        s = json.loads(self.get("/status")[1])
+        self.assertEqual(sorted(a["id"] for a in s["articles"]), ["101", "102", "fb201", "fb202"])
+        self.assertEqual([a["id"] for a in s["articles"] if a["on_card"]], ["101"])
+        self.assertEqual(self.get("/finish", method="POST", body={"id": "{meta.x}"})[0], 400)
+        self.assertEqual(self.get("/finish", method="POST", body={"id": "fb201"})[0], 200)
+        self.assertEqual(self.lib.sources["feedbin"].finished, ["fb201"])
+        self.assertEqual(json.loads(self.get("/status")[1])["finished_count"], 1)
+
     def test_list_rows_names_and_sync_row(self):
         for i in self.lib.catalog():
             self.lib.epub_path(i["id"])          # pre-build everything
