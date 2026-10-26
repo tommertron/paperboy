@@ -30,6 +30,7 @@ The reader reports EVERY book it closes, and its event queue stops at the first
 non-2xx. So /progress answers 200 for anything it can't or needn't act on and
 only returns 5xx for failures worth retrying.
 """
+import hashlib
 import hmac
 import json
 import os
@@ -50,6 +51,7 @@ LIST_TTL = 60          # seconds to reuse a source's list
 MAX_PAGE = 16          # firmware page_size is 1..16
 WARM_EVERY = 600       # seconds between pre-build passes
 EPUB_VERSION = "v4"    # bump when the EPUB design changes; old cache entries go unused
+_epub_tag = EPUB_VERSION  # EPUB_VERSION plus anything in config that changes the built file
 SYNC_ID = "sync-all"
 SIDECAR_KEY = "paperboy_id"
 LEGACY_SIDECAR_KEYS = ("instapaper_id",)
@@ -66,11 +68,22 @@ def file_stem(title):
     return s[:70].rstrip("-") or "Article"
 
 
+def epub_tag():
+    """What a built EPUB is keyed on: in cache filenames and sidecars, so a
+    change (a new design, or a different library_author) rebuilds the cache and
+    the home tidy-up refreshes the copies on the card."""
+    return _epub_tag
+
+
 class Library:
     """The reading list across sources, plus the EPUB cache and finished ids."""
 
     def __init__(self, cfg):
+        global _epub_tag
         self.cfg = cfg
+        self.library_author = epub.clean_text(cfg.get("library_author") or "")
+        _epub_tag = EPUB_VERSION + (
+            "-" + hashlib.sha1(self.library_author.encode()).hexdigest()[:6] if self.library_author else "")
         self.sources = {}
         if cfg.get("instapaper"):
             self.sources["instapaper"] = Instapaper(cfg["instapaper"])
@@ -131,7 +144,7 @@ class Library:
     # --- EPUBs ---
 
     def cache_path(self, item_id):
-        return os.path.join(self.cache_dir, f"{item_id}.{EPUB_VERSION}.epub")
+        return os.path.join(self.cache_dir, f"{item_id}.{epub_tag()}.epub")
 
     def cached(self, item_id):
         return os.path.exists(self.cache_path(item_id))
@@ -157,7 +170,8 @@ class Library:
         art = {"id": item_id, "title": item["title"], "url": item["url"], "site": item["site"],
                "author": epub.clean_text(author or item.get("author") or ""), "date": item["date"],
                "body": body, "images": images,
-               "cover": epub.fetch_cover(s, cover_url) if cover_url else None}
+               "cover": epub.fetch_cover(s, cover_url) if cover_url else None,
+               "library_author": self.library_author}
         epub.build_epub(art, path)
         log(f"built {item_id} ({item['title'][:60]})")
         return path
@@ -274,6 +288,7 @@ class Library:
             "sources": list(self.sources),
             "archive_at": self.cfg["archive_at"],
             "reader_sync": bool(self.cfg["reader_sync"]),
+            "library_author": self.library_author,
             "errors": errors,
             "articles": [{k: i.get(k, "") for k in ("id", "title", "site", "date", "url", "source")}
                          | {"ready": self.cached(i["id"]), "on_card": i["id"] in on_card}
@@ -325,7 +340,7 @@ def files_for(item):
 
 def sidecar_bytes(item_id):
     # "epub" lets the home tidy-up spot copies built to an older design.
-    return json.dumps({SIDECAR_KEY: item_id, "epub": EPUB_VERSION}).encode()
+    return json.dumps({SIDECAR_KEY: item_id, "epub": epub_tag()}).encode()
 
 
 class Handler(BaseHTTPRequestHandler):

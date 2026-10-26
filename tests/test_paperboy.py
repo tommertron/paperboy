@@ -187,6 +187,19 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.get(f"/f/nope/First-Article.epub", auth=False)[0], 401)
         self.assertEqual(self.get(f"/f/{TOKEN}/Nope.epub", auth=False)[0], 404)
 
+    def test_library_author(self):
+        creator = lambda p: re.search(r"<dc:creator>(.*?)</dc:creator>",
+                                      zipfile.ZipFile(p).read("OEBPS/content.opf").decode()).group(1)
+        self.assertEqual(creator(self.lib.epub_path("101")), "A. Writer")    # off by default
+        lib = server.Library(dict(self.lib.cfg, library_author="Paperboy"))
+        lib.sources = self.lib.sources
+        p = lib.epub_path("101")
+        self.assertEqual(creator(p), "Paperboy")
+        self.assertIn("A. Writer", zipfile.ZipFile(p).read("OEBPS/article.xhtml").decode())
+        # A different tag, so the cache rebuilds and the tidy-up refreshes the card
+        self.assertNotEqual(json.loads(server.sidecar_bytes("101"))["epub"], server.EPUB_VERSION)
+        self.assertNotEqual(os.path.basename(p), f"101.{server.EPUB_VERSION}.epub")
+
     def test_end_page_counts_as_finished(self):
         p = self.lib.epub_path("101")
         with zipfile.ZipFile(p) as z:

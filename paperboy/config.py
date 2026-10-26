@@ -10,6 +10,8 @@
   "port": 17300,
   "bind": "0.0.0.0",
   "reader_sync": true,                     tidy the reader when it's in File Transfer mode
+  "library_author": "",                    if set (e.g. "Paperboy"), every article's EPUB author,
+                                           so the Library's Author tab groups them apart from books
   "broadcast": ["255.255.255.255"],        where to look for the reader
   "token": "..."                           added on first start
 }
@@ -30,6 +32,7 @@ DEFAULTS = {
     "reader_sync": True,
     "broadcast": ["255.255.255.255"],
     "public_url": "",
+    "library_author": "",
 }
 
 

@@ -401,7 +401,9 @@ def finish_at(path):
 
 def build_epub(art, path):
     title_t = esc(art["title"])
-    author_t = esc(art["author"] or art["site"] or "Paperboy")
+    # library_author overrides only the metadata the reader's Library sorts on;
+    # the cover and the article page keep the real byline.
+    author_t = esc(art.get("library_author") or art["author"] or art["site"] or "Paperboy")
     moddate = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
     parts = []

@@ -40,6 +40,7 @@ On first start a `token` is added to `data/config.json`. Then on the reader: ope
 | `port` | `17300` | |
 | `bind` | `0.0.0.0` | |
 | `reader_sync` | `true` | Tidy the reader while it's in File Transfer mode |
+| `library_author` | off | Set to a name such as `"Paperboy"` to give every article that author in its EPUB, so the reader's Library groups your articles together on the Author tab instead of mixing them in with your books. The real author is still on the cover and the article. Changing it refreshes the articles on the reader at the next home tidy-up, which resets your place in any half-read article |
 | `broadcast` | `["255.255.255.255"]` | Where to look for the reader |
 | `token` | generated | What the reader uses to authenticate |
 
