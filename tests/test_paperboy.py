@@ -317,6 +317,17 @@ class ReaderSyncTest(unittest.TestCase):
         finally:
             srv.shutdown()
 
+    def test_replacement_never_keeps_the_old_size(self):
+        # CrossPoint keeps a book's old title/author when size and timestamp match,
+        # and uploads all get one timestamp.
+        data = open(make_library().epub_path("101"), "rb").read()
+        self.assertIs(reader_sync.differ_in_size(data, len(data) + 1), data)
+        padded = reader_sync.differ_in_size(data, len(data))
+        self.assertNotEqual(len(padded), len(data))
+        z = zipfile.ZipFile(io.BytesIO(padded))
+        self.assertIsNone(z.testzip())
+        self.assertEqual(z.read("OEBPS/content.opf"), zipfile.ZipFile(io.BytesIO(data)).read("OEBPS/content.opf"))
+
     def test_replaces_copies_built_to_an_older_design(self):
         lib = make_library()
         FakeReader.card = {

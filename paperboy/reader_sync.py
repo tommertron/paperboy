@@ -15,6 +15,7 @@ id; everything else on the card is invisible to it. If any source can't be
 read the pass is skipped (an outage must never look like an empty reading
 list), and an empty reading list never deletes anything.
 """
+import io
 import json
 import socket
 import time
@@ -22,6 +23,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+import zipfile
 
 from .config import data_path
 from .log import log
@@ -98,8 +100,9 @@ class Reader:
 
 
 def card_state(reader):
-    """({id: [epub paths]}, [orphan sidecar paths], main_folder_exists, {epub path: version})."""
-    have, orphans, versions = {}, [], {}
+    """({id: [epub paths]}, [orphan sidecar paths], main_folder_exists,
+    {epub path: version}, {epub path: size})."""
+    have, orphans, versions, sizes = {}, [], {}, {}
     # Listing a folder that doesn't exist answers [] rather than 404 on
     # CrossPoint 2.0.0rc, so check the root for the folder itself.
     exists = any(e.get("isDirectory") and e.get("name") == FOLDER.strip("/")
@@ -132,9 +135,24 @@ def card_state(reader):
             if epub in files:
                 have.setdefault(item_id, []).append(f"{folder}/{epub}")
                 versions[f"{folder}/{epub}"] = version
+                sizes[f"{folder}/{epub}"] = files[epub]
             else:
                 orphans.append(path)
-    return have, orphans, exists, versions
+    return have, orphans, exists, versions, sizes
+
+
+def differ_in_size(data, old_size):
+    """CrossPoint's Library re-reads a book's title and author only when its
+    size or timestamp changes, and every file uploaded over File Transfer gets
+    the same timestamp. A rebuilt EPUB can compress to the very same size (a new
+    author name moves it by a byte or two), so pad the zip comment until it
+    doesn't, or the Library keeps showing the old metadata."""
+    if len(data) != old_size:
+        return data
+    buf = io.BytesIO(data)
+    with zipfile.ZipFile(buf, "a") as z:
+        z.comment = b"paperboy"
+    return buf.getvalue()
 
 
 def sync_pass(lib, host, sidecar_bytes, files_for, dry_run=False):
@@ -144,9 +162,9 @@ def sync_pass(lib, host, sidecar_bytes, files_for, dry_run=False):
         return None
     items = lib.catalog()   # raises on any source failure -> no pass at all
     want = {i["id"]: i for i in items}
-    have, orphans, exists, versions = card_state(reader)
+    have, orphans, exists, versions, sizes = card_state(reader)
 
-    delete, removed, outdated = list(orphans), [], []
+    delete, removed, outdated, old_size = list(orphans), [], [], {}
     for item_id, epubs in have.items():
         if item_id not in want:
             if items:   # never purge against an empty reading list
@@ -163,6 +181,8 @@ def sync_pass(lib, host, sidecar_bytes, files_for, dry_run=False):
         if versions.get(keep) != current:
             delete += [keep, keep + ".meta.json"]
             outdated.append(item_id)
+            if keep == canonical:
+                old_size[item_id] = sizes.get(keep)
 
     missing = [i for i in items if i["id"] not in have or i["id"] in outdated]
     if dry_run:
@@ -186,7 +206,8 @@ def sync_pass(lib, host, sidecar_bytes, files_for, dry_run=False):
             continue
         epub_name, meta_name = files_for(i)
         with open(p, "rb") as f:
-            reader.upload(FOLDER, epub_name, f.read(), "application/epub+zip")
+            reader.upload(FOLDER, epub_name, differ_in_size(f.read(), old_size.get(i["id"])),
+                          "application/epub+zip")
         # Sidecar second: a half-finished pass leaves an EPUB without one
         # (retried next pass), never a sidecar pointing at nothing.
         reader.upload(FOLDER, meta_name, sidecar_bytes(i["id"]), "application/json")
